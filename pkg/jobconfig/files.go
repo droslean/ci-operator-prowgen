@@ -16,8 +16,35 @@ import (
 	prowconfig "k8s.io/test-infra/prow/config"
 )
 
-// ReadFromDir reads Prow job config from a directory and merges into one config
-func ReadFromDir(dir string) (*prowconfig.JobConfig, error) {
+func DeterminizeJobs(prowJobConfigDir string) error {
+	if err := filepath.Walk(prowJobConfigDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to walk file/directory '%s'", path)
+			return nil
+		}
+
+		if info.IsDir() && filepath.Clean(filepath.Dir(filepath.Dir(path))) == filepath.Clean(prowJobConfigDir) {
+			var jobConfig *prowconfig.JobConfig
+			if jobConfig, err = readFromDir(path); err != nil {
+				return fmt.Errorf("failed to read Prow job config from '%s' (%v)", path, err)
+			}
+
+			repo := filepath.Base(path)
+			org := filepath.Base(filepath.Dir(path))
+			if err := writeToDir(prowJobConfigDir, org, repo, jobConfig); err != nil {
+				return fmt.Errorf("failed to write Prow job config to '%s' (%v)", path, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to determinize all Prow jobs: %v", err)
+	}
+
+	return nil
+}
+
+// readFromDir reads Prow job config from a directory and merges into one config
+func readFromDir(dir string) (*prowconfig.JobConfig, error) {
 	jobConfig := &prowconfig.JobConfig{
 		Presubmits:  map[string][]prowconfig.Presubmit{},
 		Postsubmits: map[string][]prowconfig.Postsubmit{},
@@ -95,7 +122,7 @@ func readFromFile(path string) (*prowconfig.JobConfig, error) {
 // into files in that directory. Jobs are sharded by branch and by type. If
 // target files already exist and contain Prow job configuration, the jobs will
 // be merged.
-func WriteToDir(jobDir, org, repo string, jobConfig *prowconfig.JobConfig) error {
+func writeToDir(jobDir, org, repo string, jobConfig *prowconfig.JobConfig) error {
 	allJobs := sets.String{}
 	files := map[string]*prowconfig.JobConfig{}
 	key := fmt.Sprintf("%s/%s", org, repo)
